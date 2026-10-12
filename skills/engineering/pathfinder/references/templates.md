@@ -4,7 +4,7 @@ This file holds the full structure for both files in the plan folder (`<plan-nam
 
 ## `context.md` structure
 
-Use these sections as a scaffold, not a straitjacket. Drop sections that don't apply; length should scale with the size of the change. The headings below are a sensible default order.
+Use these sections as a scaffold, not a straitjacket. Drop sections that don't apply; length should scale with the size of the change. The headings below are a sensible default order. In design-driven mode most of these shrink to a pointer at `../design.md` — keep only what's specific to this part.
 
 ```markdown
 # <Title> — Implementation Plan
@@ -51,26 +51,7 @@ writing the plan.
 
 ## `path.json` schema
 
-A JSON array of step objects. Each object has exactly these fields:
-
-```json
-[
-  {
-    "id": 1,
-    "title": "Short imperative label",
-    "kind": "implementation",
-    "action": "What must be done for this step to be complete — specific enough to execute: which file, which function, what behavior.",
-    "status": "pending",
-    "notes": "Extra guidance when the action alone isn't enough; otherwise an empty string."
-  }
-]
-```
-
-Rules (full field meanings, `kind` semantics, and step principles are in SKILL.md's *Derive `path.json`* section — here's just what the example above doesn't show on its own):
-- Exactly the six fields above, nothing more.
-- `id` sequential from 1, in execution order.
-- `status` is `"pending"` on a fresh plan.
-- Steps are exhaustive (include tests, wiring, migrations, cleanup) and ordered so each step's prerequisites precede it.
+A JSON array of step objects, each with exactly the six fields and nothing more. Field meanings, `kind` semantics, and what makes a good step are all in SKILL.md's *Derive `path.json`* section — don't re-derive them from the example below.
 
 ## Worked example (abridged)
 
@@ -143,6 +124,14 @@ adding a dup URL is a no-op. Read test: pre-existing dups collapse to one.
   },
   {
     "id": 4,
+    "title": "Consolidate the accumulated diff",
+    "kind": "implementation",
+    "action": "Re-read every change made by steps 1-3 as one diff and run the /simplify skill over it: collapse near-duplicate helpers, share types that ended up copied, and delete scaffolding no longer reached. Change no behavior.",
+    "status": "pending",
+    "notes": "Both the store and the read service call normalizeUrl — check they converged on one call shape rather than two."
+  },
+  {
+    "id": 5,
     "title": "Run the full test suite",
     "kind": "verification",
     "action": "Run the project's complete test suite and confirm it passes, including the new normalizeUrl and feed-store tests.",
@@ -152,4 +141,4 @@ adding a dup URL is a no-op. Read test: pre-existing dups collapse to one.
 ]
 ```
 
-Note the mix of `kind`: writing a test file is `implementation` (it changes the codebase), while running the suite in step 4 is `verification` (it only checks, and changes nothing). Each JSON step still traces to something the markdown already decided, and `notes` points back to the markdown for the *why* rather than re-arguing it — and, for the expensive verification, flags the cost so the executor knows to pause.
+Note the mix of `kind`: writing a test file is `implementation` (it changes the codebase), and so is the consolidation pass, while running the suite is `verification` (it only checks, and changes nothing). Each JSON step still traces to something the markdown already decided, and `notes` points back to the markdown for the *why* rather than re-arguing it — and, for the expensive verification, flags the cost so the executor knows to pause.
