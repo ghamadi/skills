@@ -1,7 +1,7 @@
 # skills
 
 These are the agent skills I use day to day with Claude Code. They encode my own workflow and preferences rather than
-aiming to be a library for general use. If something here fits your needs, feel free to grab it.
+serve as a general-purpose library. If something here fits your needs, feel free to grab it.
 
 Some skills are my own, and some are copied from public sources such as
 [mattpocock/skills](https://github.com/mattpocock/skills) repo. The [License](#license) section below covers how sources
