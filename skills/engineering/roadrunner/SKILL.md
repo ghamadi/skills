@@ -18,12 +18,16 @@ Read `context.md`, then the **whole** `path.json`, before touching step 1. The r
 is for, and the full arc keeps an early step from painting a later one into a corner. Given only a plan name, look in
 `.agents/plans/<name>/`, then `.claude/plans/<name>/`.
 
+A plan may already be part-run. Steps marked `done` or `skipped` are finished; start at the first step that isn't. If
+it's `in_progress` or `blocked`, a previous run stopped there and may have left it half-done, so check what it already
+changed before redoing it.
+
 A part folder (`<feature>/01-<part-name>/`, beside a `design.md`) runs like any other plan: its `path.json` already
 carries what the design pinned, so the design doc isn't yours to read or reconcile.
 
 ## The loop
 
-For each step in `id` order:
+From there, for each step in `id` order:
 
 1. Set its `status` to `in_progress` and save.
 2. Do exactly what `action` says, heeding `notes` — no more, and no reinterpretation. A plan you "improved" mid-run is
@@ -32,6 +36,7 @@ For each step in `id` order:
 
 Save each change at once, so an interrupted run resumes from the file rather than your memory. Edit only the `status`
 field, and only along `pending → in_progress → done | blocked | skipped` — the values pathfinder's validator accepts.
+A `blocked` step returns to `in_progress` when the user's direction, or a later run, resumes it.
 
 `action` is the source of truth; `context.md` explains the why and never overrides it. If the two disagree in a way
 that changes what you'd do, that's a hole in the plan: a blocker.

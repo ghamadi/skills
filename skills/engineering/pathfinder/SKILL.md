@@ -89,8 +89,7 @@ On `BLOCKED`, show the message verbatim and ask with `AskUserQuestion`: `Escalat
 as direction to send back to the executor. An agent keeps the effort it was spawned with, so escalating means a fresh
 executor at `effort: "high"`, or the level the user names. It starts cold, so its prompt is the one above plus:
 
-> Resume, don't restart. Steps marked `done` or `skipped` are finished. Start at the first step that isn't; if it is
-> `blocked`, reset it to `in_progress`. The previous run stopped there with:
+> A previous run stopped at the `blocked` step with:
 >
 > <the BLOCKED message>
 
