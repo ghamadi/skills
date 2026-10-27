@@ -19,6 +19,8 @@ Development artifacts for a skill (eval inputs and run output) live under `evals
 inside the skill directory — everything inside a skill directory is deployment payload and travels with the skill
 wherever it's installed.
 
+Retired skills move to `deprecated/<name>/` at the repo root, kept for reference only.
+
 ## License
 
 [MIT](LICENSE).
