@@ -1,129 +1,146 @@
 ---
 name: branch-review
-description: >-
-  Performs a focused, action-oriented review of the current branch against its base branch. Use when the user asks for a
-  branch review, PR review, pre-merge review, or /branch-review.
+description: Pre-merge review of a branch against a base ref, reporting only issues that need action before merge.
+argument-hint: --base <ref> [context]
+disable-model-invocation: true
 ---
 
-You are a senior engineer reviewing a target checkout against its base branch. Report only findings that require a
-concrete action before merge.
+Review a branch against its base and report every issue the branch _introduces_ that needs action before merge. Never
+edit the code under review: read, grep, and run checks.
 
-## Invocation contract
+Scripts live in `scripts/` beside this file; run them by absolute path from inside the repository. A script that prints
+`status: error` has failed: reply with its error and how to fix it, then stop.
 
-- `REVIEW_ROOT` is the repository root to review. It defaults to the current repository root.
-- `BASE_REF` is the fetched base ref. When not supplied, resolve it as described in
-  [Resolving the base](#resolving-the-base).
-- `TARGET_REF` is the target ref. It defaults to `HEAD`.
-- `CHECKS` is the commands that type-check and test the project. When not supplied, find them as described in
-  [Discovering the checks](#discovering-the-checks).
-- A wrapper may supply these values. Honor them instead of inferring paths or checking out branches.
-- Run every Git command, file read, type-check, and test inside `REVIEW_ROOT`. Do not inspect a different worktree.
-- Before reviewing, verify that `REVIEW_ROOT`, `BASE_REF`, and `TARGET_REF` resolve. Report a setup blocker rather than
-  silently falling back to another checkout or stale ref.
+## Arguments
 
-## Resolving the base
+- `--base <ref>` (required): the ref to review against, used exactly as it exists locally. Fetching is the user's job.
+  When it is missing, stop and ask: "Did you mean `--base <ref>`?" if the arguments open with something ref-like,
+  otherwise "Base ref? (e.g. `origin/main`)".
+- Any other text is **context**: the change's intent, divergence from existing patterns that is intentional, issues
+  known to exist on the base, paths to treat as generated. Context overrides anything you would infer.
 
-When `BASE_REF` is not supplied, take the branch name from the first source that yields one:
+## Steps
 
-1. The base of the open PR for the target branch: `gh pr view --json baseRefName -q .baseRefName`.
-2. The repository's default branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
-3. The locally cached default: `git symbolic-ref --short refs/remotes/origin/HEAD`, with the `origin/` prefix stripped.
+### 1. Setup
 
-A source that errors or returns nothing (no `gh`, no open PR, not a GitHub remote) yields no name; move to the next. If
-none yields one, report a setup blocker.
+Run `setup.sh --base <ref>`. The review covers the checked-out branch, uncommitted and untracked changes included.
 
-Then run `git fetch origin <branch>` and set `BASE_REF` to `origin/<branch>`. The local branch of the same name is often
-behind the remote, which puts already-merged commits into the diff. If the fetch fails, report a setup blocker.
+- `status: empty`: reply "Nothing to review: `<branch>` has no changes against `<base>`." and stop.
+- `status: ok`: every later command and file read happens inside `repo_root`.
 
-## Discovering the checks
+Done when setup prints `status: ok`.
 
-When `CHECKS` is not supplied, find the command the project uses to type-check (or compile, where compiling is the
-type-check) and the command it uses to run its tests. For each, take the first source that defines it:
+### 2. Inventory
 
-1. Repository instructions: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README`.
-2. Task definitions: `package.json` scripts, `Makefile`, `justfile`, or the toolchain's standard commands
-   (`cargo check`, `go build ./...`, `pytest`).
-3. CI configuration: the commands the pipeline runs on a pull request.
+Run `inventory.sh <run_dir> [<glob> ...]`, passing context's generated paths as globs. It prints changed files with
+numbered hunks (H1, H2, …), excluded files, merge conflicts with the base, and files changed on both sides. It runs
+before the checks so that nothing a check writes is counted as the branch's change.
 
-Take only commands that verify code; leave out anything that deploys, publishes, or writes to an external system.
+Done when inventory prints `status: ok`.
 
-Record a check the project does not define as "not found". Only a command that ran and exited clean counts as passed.
+### 3. Checks
 
-## Method
+Find the commands that type-check (or compile), lint, and test the project. Take each from the first source that
+defines it: repository instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README`), task definitions
+(`package.json` scripts, `Makefile`, `justfile`, or commands the language's toolchain ships with, such as `go vet` or
+`cargo test`), then the CI pipeline for pull requests. Add a separate format check only when CI blocks merges on it;
+scope to affected packages only when CI does. Take only commands that verify code, in a form that writes nothing: drop
+any `--fix` or `--write` the project's command carries. A check no source defines is "not found", even when the code
+hints at a tool for it.
 
-1. Diff against the merge-base (`git diff "$BASE_REF...$TARGET_REF"`) so commits already on the base are not flagged.
-2. From `REVIEW_ROOT`, run every command in `CHECKS`. Run them all even if one fails; capture output from each.
-3. Enumerate the code paths this branch adds or changes, then check which ones a test actually exercises. Do this
-   mapping explicitly — a passing test suite tells you existing tests pass, not that the new paths are covered. This is
-   easy to miss, so run the audit as its own pass so coverage gaps surface instead of being reasoned past.
-4. Infer the PR's intent from commits, naming, tests, and surrounding code. Review changed code in context, not just the
-   diff.
-5. Check consistency with existing conventions and nearby implementations.
-6. Trace the user flows the branch touches for broken, confusing, inaccessible, or incomplete UX states.
-7. Consider deploy and rollback: migrations, backwards compatibility, stale clients, existing data, partial failure,
-   mixed old/new system states.
+Run checks one at a time, each in its own `run-checks.sh <run_dir> '<command>'` call with a long timeout. Run one that
+may take more than 10 minutes in the background, and wait for it before starting the next. Read a log of 150 lines or
+fewer whole; in a longer one, search for the runner's failure markers with surrounding lines, plus its closing summary.
+
+A check that prints `modified:` wrote to the tree. Keep what it wrote, shown by the command on that line, out of the
+review. `modified: unknown` means the tree could not be snapshotted, so the check may have written anything.
+
+Classify every failure:
+
+- **could not run**: the environment blocked it (missing env var, service, network, tool, or dependency), not the code.
+- **introduced**: its location or error chain touches a file or symbol the branch changed, or the branch changed the
+  tool's configuration.
+- **pre-existing**: it touches nothing the branch changed, or context declares it.
+- Unclear: report it as a finding marked `may be pre-existing`.
+
+Done when every check has a status and every failure has a class.
+
+### 4. Ledger
+
+From the inventory, write the _ledger_ to `<run_dir>/ledger.md`, one line per entry. An entry is the smallest named
+unit holding changed lines: function, method, component, handler, query, schema, migration, config key; the whole file
+when it has no smaller unit.
+
+```
+E3 | src/billing/refund.ts | refundOrder() | H1,H2 | contract: return type | consumers: api/refunds.ts, jobs/retry.ts | tests: refund.test.ts | lenses: correctness,errors,data,tests
+```
+
+- **contract**: what callers or readers can observe changing (signature, return shape, behavior, schema, event, route,
+  config key), or `none`.
+- **consumers**: for every contract change, its users, found with `git grep -n --untracked`.
+- **tests**: the tests that exercise the unit, found by grepping its name, route, or component; or `none`.
+- **lenses**: the [lenses](#lenses) that apply. `correctness` and `tests` apply to every code entry.
+
+Done when `reconcile.sh <run_dir>` reports no problem other than `open:` entries.
+
+### 5. Review
+
+Take entries in ledger order. For each, read its hunks with `git diff-index -p -M <merge_base> -- <file>`, naming both
+paths for a rename, or read the whole file when untracked. Unlike `git diff`, this ignores the user's diff settings,
+so the hunks match the inventory's. Read the code around them that the unit depends on, check every consumer, and
+apply every lens. Record candidate findings as you go, then append `closed E<n> <lenses applied>` to the ledger. For
+each file changed on both sides, and each file in `<run_dir>/base-changed.txt` that an entry imports from, read the
+base's change (`git diff-tree -p <merge_base> <base> -- <file>`) against the branch's use of it.
+
+Done when `reconcile.sh <run_dir>` prints `status: reconciled`.
+
+### 6. Verify
+
+Settle every candidate against the code: read the call path, or run an existing test that exercises it.
+
+- Confirmed: keep.
+- Refuted: drop.
+- Unresolved: keep, marked `unverified`, with the assumption it rests on.
+
+Group what survives by root cause: one finding per cause, listing every site. Done when every candidate is confirmed,
+refuted, or unverified.
+
+### 7. Report
+
+Read `report-template.md` beside this file and fill it in. Done when the report follows the template.
 
 ## What counts as a finding
 
-Include an issue only if all of these hold:
+A finding is _introduced_: this branch added the risk. A path the branch adds is introduced even inside a file that was
+already untested or messy. Anything the branch does not touch is pre-existing and stays out of Findings.
 
-- It is introduced or exposed by this branch. Pre-existing failures on the base that the branch doesn't touch are not
-  blockers — note them briefly instead if they are relevant.
-  - What decides this is whether the branch added the risk, not whether the surrounding code was already imperfect. A
-    code path this branch adds is new even if the file around it was already untested or messy — "this file had no tests
-    before" does not excuse a newly added untested path.
-- It carries real risk: a bug, regression, broken edge case, security/privacy/authn/authz flaw, data-integrity issue,
-  type-safety hole with runtime impact, missing or incorrect error handling, performance problem with practical impact,
-  UX defect (confusing states, broken flows, missing feedback, inaccessible interactions), rollout hazard, or concrete
-  maintainability damage (bypassed boundaries, duplicated important logic, mixed responsibilities, weakened contracts).
-- It is tied to specific code, files, or diff hunks, and the fix is reasonably clear.
+It carries real risk under at least one [lens](#lenses), and it is tied to specific code with a clear fix. Praise,
+informational notes, nitpicks, formatting, and style preferences are not findings.
 
-Also treat as findings:
+Always findings:
 
-- Each distinct `CHECKS` failure — these are merge blockers. Include the failing command and the error or assertion
-  output; group errors sharing one root cause (e.g. several type errors from one bad interface).
-- Invariants the code documents or trusts callers to satisfy (bounds, ordering, uniqueness, non-null) where silent
-  violation is plausible and a guard or assertion would make the failure explicit.
-- Incomplete implementation relative to the PR's apparent intent.
-- Missing tests on new or changed code paths. Using the coverage map from step 3, flag any new branch that nothing
-  exercises when a silent break or regression there would carry real risk. Do not let apparent simplicity wave it
-  through. For new branches in security, authn/authz, permissions, payments, or data-integrity code, flag the missing
-  test regardless of how simple the branch looks; these are where a silent regression is most costly and least visible,
-  and simplicity is not evidence of safety. Genuinely inert changes — pure presentation, copy, config/bootstrap with no
-  logic to break — do not need a test, and absence of one there is not a finding.
+- Every introduced check failure, with the command and the decisive error lines.
+- Every merge conflict with the base.
+- An invariant the code documents or trusts callers to keep (bounds, ordering, uniqueness, non-null) where silent
+  violation is plausible and a guard would make the failure explicit.
+- Implementation incomplete against the intent, from context or inferred.
+- A new or changed path no test exercises, when a silent break there carries real risk. In security, authz,
+  permissions, payments, or data-integrity code, flag it however simple the path looks: simplicity is not evidence of
+  safety. Pure presentation, copy, and logic-free config need no test.
 
-Exclude: praise, informational notes, nitpicks, formatting, style preferences, repeats of the same issue in equivalent
-contexts, and architectural, UX, or rollout commentary that doesn't identify a concrete problem introduced by this
-branch.
+Divergence that context declares intentional is not a consistency finding; bugs the divergence causes still are.
 
-Every finding states the issue, why it matters, links to the relevant code (file and line), and a recommended action.
-Use precise language — avoid "consider," "maybe," "might"; when uncertain, state the assumption explicitly. If nothing
-qualifies, say so clearly in Findings.
+State each claim as fact or as an explicit assumption.
 
-## Output Format
+## Lenses
 
-Return exactly this Markdown structure, findings ordered most severe first:
-
-```markdown
-## Summary
-
-<concise summary of what this PR is trying to achieve>
-
-<one line naming the base and how it was resolved, e.g. "Reviewed against `origin/main` (open PR base)." or "Reviewed
-against `origin/release-2` (supplied).">
-
-<one line on automated checks, naming each command run, e.g. "`pnpm type-check` and `pnpm test` passed." or
-"`cargo check` failed (2 errors); `cargo test` passed." or "`pytest` passed; no type-check found.">
-
-## Findings
-
-### Finding <numeric id>
-
-<issue, why it matters, links to relevant code, recommended action>
-
-## Findings Summary
-
-|           id | description           | links   | recommended action |
-| -----------: | --------------------- | ------- | ------------------ |
-| <numeric id> | <concise description> | <links> | <specific action>  |
-```
+- **correctness**: logic, regressions, edge cases, invariants, type holes with runtime impact, completeness.
+- **errors**: failure handling, partial failure, feedback when something fails.
+- **security**: authn/authz, injection, secrets, privacy.
+- **data**: integrity, effect on existing data, concurrent writes.
+- **perf**: practical cost such as N+1 queries, unbounded work, oversized payloads.
+- **consistency**: existing conventions and nearby implementations; bypassed boundaries, duplicated important logic,
+  mixed responsibilities, weakened contracts.
+- **ux**: user flows with broken, confusing, inaccessible, or incomplete states.
+- **deploy**: migrations, backwards compatibility, stale clients, partial failure, mixed old/new versions, rollback.
+- **tests**: whether a test exercises each new or changed path.
